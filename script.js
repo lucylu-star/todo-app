@@ -35,7 +35,11 @@ class ThemeManager {
             html.classList.remove('dark-theme');
         }
         this.theme = theme;
-        localStorage.setItem(THEME_KEY, theme);
+        try {
+            localStorage.setItem(THEME_KEY, theme);
+        } catch (e) {
+            console.warn('todo-app: unable to persist theme to localStorage', e);
+        }
         this.updateToggleIcon();
     }
 
@@ -46,8 +50,12 @@ class ThemeManager {
 
     updateToggleIcon() {
         const toggleBtn = document.getElementById('themeToggle');
+        if (!toggleBtn) return;
         const icon = toggleBtn.querySelector('.theme-icon');
+        if (!icon) return;
         icon.textContent = this.theme === 'dark' ? '☀️' : '🌙';
+        // update aria-pressed for accessibility
+        toggleBtn.setAttribute('aria-pressed', this.theme === 'dark' ? 'true' : 'false');
     }
 
     getCurrentTheme() {
@@ -75,16 +83,20 @@ class TodoApp {
         
         // Set default due date to today
         const today = new Date().toISOString().split('T')[0];
-        this.dueDateInput.value = today;
+        if (this.dueDateInput) this.dueDateInput.value = today;
     }
 
     attachEventListeners() {
-        this.addBtn.addEventListener('click', () => this.addTodo());
-        this.todoInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                this.addTodo();
-            }
-        });
+        if (this.addBtn) {
+            this.addBtn.addEventListener('click', () => this.addTodo());
+        }
+        if (this.todoInput) {
+            this.todoInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    this.addTodo();
+                }
+            });
+        }
 
         this.filterBtns.forEach(btn => {
             btn.addEventListener('click', (e) => {
@@ -94,6 +106,20 @@ class TodoApp {
                 this.render();
             });
         });
+
+        // Use event delegation for dynamic todo list interactions
+        if (this.todoList) {
+            this.todoList.addEventListener('click', (e) => {
+                const target = e.target;
+                if (target.matches('.delete-btn')) {
+                    const id = Number(target.dataset.id);
+                    if (!Number.isNaN(id)) this.deleteTodo(id);
+                } else if (target.matches('input[type="checkbox"]')) {
+                    const id = Number(target.dataset.id);
+                    if (!Number.isNaN(id)) this.toggleTodo(id);
+                }
+            });
+        }
     }
 
     addTodo() {
@@ -122,8 +148,8 @@ class TodoApp {
         this.saveTodos();
         this.todoInput.value = '';
         const today = new Date().toISOString().split('T')[0];
-        this.dueDateInput.value = today;
-        this.todoInput.focus();
+        if (this.dueDateInput) this.dueDateInput.value = today;
+        if (this.todoInput) this.todoInput.focus();
         this.render();
     }
 
@@ -180,14 +206,14 @@ class TodoApp {
         const filtered = this.getFilteredTodos();
         
         if (filtered.length === 0) {
-            this.todoList.innerHTML = `
+            if (this.todoList) this.todoList.innerHTML = `
                 <div class="empty-state">
                     <div class="empty-state-icon">📭</div>
                     <p>${this.currentFilter === 'all' ? 'No tasks yet. Add one to get started!' : `No ${this.currentFilter} tasks`}</p>
                 </div>
             `;
         } else {
-            this.todoList.innerHTML = filtered.map(todo => {
+            if (this.todoList) this.todoList.innerHTML = filtered.map(todo => {
                 const dueDateStatus = this.getDueDateStatus(todo.dueDate);
                 const formattedDate = this.formatDueDate(todo.dueDate);
                 const dueDateClass = dueDateStatus === 'normal' ? '' : dueDateStatus;
@@ -196,12 +222,12 @@ class TodoApp {
                 <li class="todo-item ${todo.completed ? 'completed' : ''}">
                     <input 
                         type="checkbox" 
+                        data-id="${todo.id}" 
                         ${todo.completed ? 'checked' : ''} 
-                        onchange="app.toggleTodo(${todo.id})"
                     >
                     <span class="todo-text">${this.escapeHtml(todo.text)}</span>
                     <span class="due-date-display ${dueDateClass}">${formattedDate}</span>
-                    <button class="delete-btn" onclick="app.deleteTodo(${todo.id})" title="Delete task">
+                    <button class="delete-btn" data-id="${todo.id}" title="Delete task">
                         ✕
                     </button>
                 </li>
@@ -217,28 +243,84 @@ class TodoApp {
         const totalTodos = this.todos.length;
         
         if (totalTodos === 0) {
-            this.todoCount.textContent = '0 tasks';
+            if (this.todoCount) this.todoCount.textContent = '0 tasks';
         } else if (activeTodos === 0) {
-            this.todoCount.textContent = `All ${totalTodos} task${totalTodos !== 1 ? 's' : ''} completed! 🎉`;
+            if (this.todoCount) this.todoCount.textContent = `All ${totalTodos} task${totalTodos !== 1 ? 's' : ''} completed! 🎉`;
         } else {
-            this.todoCount.textContent = `${activeTodos} of ${totalTodos} task${totalTodos !== 1 ? 's' : ''} remaining`;
+            if (this.todoCount) this.todoCount.textContent = `${activeTodos} of ${totalTodos} task${totalTodos !== 1 ? 's' : ''} remaining`;
         }
     }
 
     saveTodos() {
-        localStorage.setItem(TODOS_KEY, JSON.stringify(this.todos));
+        try {
+            localStorage.setItem(TODOS_KEY, JSON.stringify(this.todos));
+        } catch (e) {
+            console.error('todo-app: Failed to save todos to localStorage', e);
+        }
     }
 
+    // Load todos with defensive parsing and lightweight migration
     loadTodos() {
-        const saved = localStorage.getItem(TODOS_KEY);
-        const todos = saved ? JSON.parse(saved) : [];
-        
-        // Add default due date to todos that don't have one (backward compatibility)
+        const saved = (() => {
+            try {
+                return localStorage.getItem(TODOS_KEY);
+            } catch (e) {
+                console.warn('todo-app: Unable to read todos from localStorage', e);
+                return null;
+            }
+        })();
+
         const today = new Date().toISOString().split('T')[0];
-        return todos.map(todo => ({
-            ...todo,
-            dueDate: todo.dueDate || today
-        }));
+        let todos = [];
+
+        if (!saved) return todos;
+
+        try {
+            const parsed = JSON.parse(saved);
+            // If stored as an object keyed by id, convert to array
+            if (!Array.isArray(parsed) && parsed && typeof parsed === 'object') {
+                const arr = Object.keys(parsed).map(k => parsed[k]);
+                todos = arr;
+            } else if (Array.isArray(parsed)) {
+                todos = parsed;
+            } else {
+                console.warn('todo-app: stored todos is not an array or object, resetting to empty');
+                return [];
+            }
+
+            // Sanitize and ensure required fields
+            todos = todos.map(item => {
+                if (!item || typeof item !== 'object') {
+                    return {
+                        id: Date.now(),
+                        text: String(item || ''),
+                        completed: false,
+                        dueDate: today,
+                        createdAt: new Date().toISOString()
+                    };
+                }
+                return {
+                    id: typeof item.id === 'number' ? item.id : (Number(item.id) || Date.now()),
+                    text: typeof item.text === 'string' ? item.text : String(item.text || ''),
+                    completed: !!item.completed,
+                    dueDate: item.dueDate || today,
+                    createdAt: item.createdAt || new Date().toISOString()
+                };
+            });
+
+            return todos;
+        } catch (e) {
+            console.warn('todo-app: Failed to parse todos from localStorage, resetting to empty array', e);
+            // Optionally back up the corrupted value for manual recovery
+            try {
+                const backupKey = `${TODOS_KEY}-backup-${Date.now()}`;
+                localStorage.setItem(backupKey, saved);
+                console.info(`todo-app: corrupted todos backed up to ${backupKey}`);
+            } catch (err) {
+                console.warn('todo-app: failed to create backup of corrupted todos', err);
+            }
+            return [];
+        }
     }
 
     escapeHtml(text) {
@@ -263,7 +345,7 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Setup theme toggle button
     const themeToggle = document.getElementById('themeToggle');
-    themeToggle.addEventListener('click', () => {
+    if (themeToggle) themeToggle.addEventListener('click', () => {
         themeManager.toggle();
     });
 
