@@ -3,6 +3,22 @@ const THEME_KEY = 'todo-app-theme';
 const TODOS_KEY = 'todo-app-todos';
 const DEFAULT_THEME = 'light';
 
+// Helper: parse YYYY-MM-DD into local Date at midnight
+function parseYMDToDate(dateString) {
+    // Expect 'YYYY-MM-DD'
+    const parts = String(dateString).split('-');
+    if (parts.length === 3) {
+        const year = Number(parts[0]);
+        const monthIndex = Number(parts[1]) - 1;
+        const day = Number(parts[2]);
+        if (!Number.isNaN(year) && !Number.isNaN(monthIndex) && !Number.isNaN(day)) {
+            return new Date(year, monthIndex, day);
+        }
+    }
+    // Fallback
+    return new Date(dateString + 'T00:00:00');
+}
+
 class ThemeManager {
     constructor() {
         this.theme = this.loadTheme();
@@ -180,7 +196,7 @@ class TodoApp {
     }
 
     formatDueDate(dateString) {
-        const date = new Date(dateString + 'T00:00:00');
+        const date = parseYMDToDate(dateString);
         return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
     }
 
@@ -188,7 +204,7 @@ class TodoApp {
         const today = new Date();
         today.setHours(0, 0, 0, 0);
         
-        const dueDate = new Date(dateString + 'T00:00:00');
+        const dueDate = parseYMDToDate(dateString);
         const timeDiff = dueDate - today;
         const daysDiff = Math.ceil(timeDiff / (1000 * 60 * 60 * 24));
         
